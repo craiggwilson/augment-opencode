@@ -110,6 +110,7 @@ async function initAuggie(): Promise<void> {
 async function createAuggieClient(auggieModel: string): Promise<AuggieClient> {
   await initAuggie();
   const sess = await loadSession();
+  debugLog('Creating Auggie Client', { model: auggieModel, apiUrl: sess.tenantURL });
   const client = await AuggieClass!.create({
     model: auggieModel,
     apiKey: sess.accessToken,
@@ -122,6 +123,7 @@ async function createAuggieClient(auggieModel: string): Promise<AuggieClient> {
 async function getAuggieClient(modelId: string): Promise<AuggieClient> {
   const modelConfig = MODEL_MAP[modelId] || MODEL_MAP[DEFAULT_MODEL];
   const auggieModel = modelConfig.auggie;
+  debugLog('getAuggieClient', { requestedModel: modelId, resolvedAuggieModel: auggieModel, usingDefault: !MODEL_MAP[modelId] });
 
   if (!clientPools[auggieModel]) {
     clientPools[auggieModel] = { available: [], inUse: new Set(), creating: 0 };
@@ -235,6 +237,8 @@ function createStreamChunk(content: string, model: string, isLast = false): stri
 function createStreamCallback(res: ServerResponse, model: string, requestId: string) {
   return (notification: SessionNotification): void => {
     const update = notification.update;
+    debugLog(`Stream Update [${requestId}]`, { type: update.sessionUpdate, content: update.content, title: update.title, status: update.status });
+
     switch (update.sessionUpdate) {
       case 'agent_message_chunk':
         if (update.content?.type === 'text' && update.content.text) {
@@ -243,24 +247,59 @@ function createStreamCallback(res: ServerResponse, model: string, requestId: str
         break;
       case 'agent_thought_chunk':
         if (update.content?.type === 'text' && update.content.text) {
+          // Send thinking as a special chunk with reasoning_content (Anthropic-style extended thinking)
+          // Also log to console for visibility
+          console.log(`[${requestId}] 💭 Thinking: ${update.content.text.substring(0, 100)}${update.content.text.length > 100 ? '...' : ''}`);
           const thoughtChunk = {
             id: `chatcmpl-${requestId}`,
             object: 'chat.completion.chunk',
             created: Math.floor(Date.now() / 1000),
             model,
-            choices: [{ index: 0, delta: { content: null, reasoning: update.content.text }, finish_reason: null }],
+            choices: [{
+              index: 0,
+              delta: {
+                role: 'assistant',
+                reasoning_content: update.content.text,
+              },
+              finish_reason: null,
+            }],
           };
           res.write(`data: ${JSON.stringify(thoughtChunk)}\n\n`);
         }
         break;
       case 'tool_call':
-        console.log(`[${requestId}] Tool call: ${update.title} (${update.status || 'started'})`);
+        console.log(`[${requestId}] 🔧 Tool call: ${update.title} (${update.status || 'started'})`);
+        // Send tool call as a status update
+        if (update.title) {
+          const toolChunk = {
+            id: `chatcmpl-${requestId}`,
+            object: 'chat.completion.chunk',
+            created: Math.floor(Date.now() / 1000),
+            model,
+            choices: [{
+              index: 0,
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: update.toolCallId || `call_${randomUUID().slice(0, 8)}`,
+                  type: 'function',
+                  function: {
+                    name: update.title,
+                    arguments: '',
+                  },
+                }],
+              },
+              finish_reason: null,
+            }],
+          };
+          res.write(`data: ${JSON.stringify(toolChunk)}\n\n`);
+        }
         break;
       case 'tool_call_update':
-        console.log(`[${requestId}] Tool update: ${update.toolCallId} (${update.status || 'updating'})`);
+        console.log(`[${requestId}] 🔧 Tool update: ${update.toolCallId} (${update.status || 'updating'})`);
         break;
       case 'plan':
-        console.log(`[${requestId}] Plan updated: ${update.entries?.length || 0} entries`);
+        console.log(`[${requestId}] 📋 Plan updated: ${update.entries?.length || 0} entries`);
         break;
     }
   };
