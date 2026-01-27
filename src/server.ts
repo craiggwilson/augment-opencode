@@ -1465,8 +1465,8 @@ async function handleChatCompletions(req: IncomingMessage, res: ServerResponse):
     abortController.abort();
   }, REQUEST_TIMEOUT_MS);
 
-  // Handle client disconnect
-  req.on('close', () => {
+  // Handle client disconnect - listen on response socket, not request
+  res.on('close', () => {
     if (!res.writableEnded) {
       structuredLog('info', 'Request', 'Client disconnected', { requestId });
       abortController.abort();
