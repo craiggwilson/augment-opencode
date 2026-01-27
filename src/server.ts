@@ -1130,61 +1130,24 @@ function createStreamCallback(res: ServerResponse, model: string, requestId: str
         const toolStatus = update.status ?? 'pending';
         const rawInput = update.rawInput;
 
-        // Use kind as the tool name since title contains human-readable descriptions
-        // like "Read `/path/to/file`" instead of just "read"
-        // This matches OpenAI's expected tool name format
-        const toolName = toolKind;
-
-        // Track tool call index
+        // Track tool call index for logging
         if (!toolCallIndices.has(toolId)) {
           toolCallIndices.set(toolId, toolCallCounter++);
         }
         const toolIndex = toolCallIndices.get(toolId) ?? 0;
 
-        // Format arguments from rawInput
+        // Format arguments from rawInput for logging
         const args = rawInput ? JSON.stringify(rawInput) : '';
 
         console.log(
-          `[${requestId}] 🔧 Tool[${String(toolIndex)}]: ${toolName} (title: ${toolTitle}) [${toolStatus}]` +
+          `[${requestId}] 🔧 Tool[${String(toolIndex)}]: ${toolKind} (title: ${toolTitle}) [${toolStatus}]` +
             (args ? ` args=${args.substring(0, 100)}...` : '')
         );
 
-        // Send full tool call with arguments
-        const toolChunk = {
-          id: `chatcmpl-${requestId}`,
-          object: 'chat.completion.chunk',
-          created: timestamp,
-          model,
-          system_fingerprint: SYSTEM_FINGERPRINT,
-          choices: [
-            {
-              index: 0,
-              delta: {
-                tool_calls: [
-                  {
-                    index: toolIndex,
-                    id: toolId,
-                    type: 'function',
-                    function: {
-                      name: toolName,
-                      arguments: args,
-                    },
-                  },
-                ],
-                // Include custom metadata for richer info
-                tool_metadata: {
-                  kind: toolKind,
-                  title: toolTitle,
-                  status: toolStatus,
-                  locations: formatLocations(update.locations),
-                },
-              },
-              finish_reason: null,
-              logprobs: null,
-            },
-          ],
-        };
-        res.write(`data: ${JSON.stringify(toolChunk)}\n\n`);
+        // NOTE: Do NOT stream tool_calls to client - Augment executes tools internally
+        // and streams results via agent_message_chunk. Streaming tool_calls would cause
+        // OpenCode to think it needs to execute these tools, which don't exist in OpenCode.
+        // Tool info is logged above for debugging purposes only.
         break;
       }
 
@@ -1197,66 +1160,26 @@ function createStreamCallback(res: ServerResponse, model: string, requestId: str
         const toolContent = update.toolContent;
         const locations = update.locations;
 
-        // Use kind as the tool name (consistent with tool_call handling)
-        const toolName = toolKind;
-
-        // Get or create tool index
+        // Get or create tool index for logging
         if (!toolCallIndices.has(toolId)) {
           toolCallIndices.set(toolId, toolCallCounter++);
         }
         const toolIndex = toolCallIndices.get(toolId) ?? 0;
 
-        // Format output content
+        // Format output content for logging
         const contentText = formatToolCallContent(toolContent);
         const outputText = rawOutput ? JSON.stringify(rawOutput) : contentText;
         const locationsText = formatLocations(locations);
 
         console.log(
-          `[${requestId}] 🔧 Tool[${String(toolIndex)}] Update: ${toolName} [${toolStatus}]` +
+          `[${requestId}] 🔧 Tool[${String(toolIndex)}] Update: ${toolKind} [${toolStatus}]` +
             (toolTitle ? ` "${toolTitle}"` : '') +
             (locationsText ? ` @${locationsText}` : '') +
             (outputText ? ` output=${outputText.substring(0, 80)}...` : '')
         );
 
-        // Stream tool update with output/result
-        const updateChunk = {
-          id: `chatcmpl-${requestId}`,
-          object: 'chat.completion.chunk',
-          created: timestamp,
-          model,
-          system_fingerprint: SYSTEM_FINGERPRINT,
-          choices: [
-            {
-              index: 0,
-              delta: {
-                tool_calls: [
-                  {
-                    index: toolIndex,
-                    id: toolId,
-                    type: 'function',
-                    function: {
-                      name: toolName,
-                      // Stream output as additional arguments (result info)
-                      arguments: outputText
-                        ? JSON.stringify({ _result: outputText.substring(0, 500) })
-                        : '',
-                    },
-                  },
-                ],
-                tool_metadata: {
-                  title: toolTitle,
-                  status: toolStatus,
-                  locations: locationsText,
-                  has_content: contentText.length > 0,
-                  has_output: Boolean(rawOutput),
-                },
-              },
-              finish_reason: null,
-              logprobs: null,
-            },
-          ],
-        };
-        res.write(`data: ${JSON.stringify(updateChunk)}\n\n`);
+        // NOTE: Do NOT stream tool_call_update to client - same reason as tool_call.
+        // Augment handles tool execution internally; we only log for debugging.
         break;
       }
 
@@ -1268,88 +1191,21 @@ function createStreamCallback(res: ServerResponse, model: string, requestId: str
             entry.status === 'completed' ? '✅' : entry.status === 'in_progress' ? '🔄' : '⏳';
           console.log(`  ${statusIcon} [${String(i + 1)}] ${entry.content} (${entry.priority})`);
         });
-
-        // Stream plan as a special metadata chunk
-        const planChunk = {
-          id: `chatcmpl-${requestId}`,
-          object: 'chat.completion.chunk',
-          created: timestamp,
-          model,
-          system_fingerprint: SYSTEM_FINGERPRINT,
-          choices: [
-            {
-              index: 0,
-              delta: {
-                // Include plan in custom field
-                plan: entries.map((e, i) => ({
-                  index: i,
-                  content: e.content,
-                  status: e.status,
-                  priority: e.priority,
-                })),
-              },
-              finish_reason: null,
-              logprobs: null,
-            },
-          ],
-        };
-        res.write(`data: ${JSON.stringify(planChunk)}\n\n`);
+        // NOTE: Do NOT stream plan to client - Augment-specific metadata, not OpenAI-compatible
         break;
       }
 
       case 'available_commands_update': {
         const commands = update.availableCommands ?? [];
         console.log(`[${requestId}] 📜 Commands: ${commands.map((c) => c.name).join(', ')}`);
-
-        // Stream available commands
-        const commandsChunk = {
-          id: `chatcmpl-${requestId}`,
-          object: 'chat.completion.chunk',
-          created: timestamp,
-          model,
-          system_fingerprint: SYSTEM_FINGERPRINT,
-          choices: [
-            {
-              index: 0,
-              delta: {
-                available_commands: commands.map((c) => ({
-                  name: c.name,
-                  description: c.description,
-                  input_hint: c.input?.hint,
-                })),
-              },
-              finish_reason: null,
-              logprobs: null,
-            },
-          ],
-        };
-        res.write(`data: ${JSON.stringify(commandsChunk)}\n\n`);
+        // NOTE: Do NOT stream commands to client - Augment-specific metadata, not OpenAI-compatible
         break;
       }
 
       case 'current_mode_update': {
         const modeId = update.currentModeId ?? 'unknown';
         console.log(`[${requestId}] 🔀 Mode: ${modeId}`);
-
-        // Stream mode change
-        const modeChunk = {
-          id: `chatcmpl-${requestId}`,
-          object: 'chat.completion.chunk',
-          created: timestamp,
-          model,
-          system_fingerprint: SYSTEM_FINGERPRINT,
-          choices: [
-            {
-              index: 0,
-              delta: {
-                current_mode: modeId,
-              },
-              finish_reason: null,
-              logprobs: null,
-            },
-          ],
-        };
-        res.write(`data: ${JSON.stringify(modeChunk)}\n\n`);
+        // NOTE: Do NOT stream mode to client - Augment-specific metadata, not OpenAI-compatible
         break;
       }
 
