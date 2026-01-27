@@ -23,7 +23,7 @@ interface Session {
 }
 
 interface ChatMessage {
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool' | 'function';
   content: string;
 }
 
@@ -869,11 +869,13 @@ function validateChatCompletionRequest(body: RawChatCompletionRequest): Validati
       };
     }
 
-    if (typeof msg.role !== 'string' || !['user', 'assistant', 'system'].includes(msg.role)) {
+    // OpenAI API supports: user, assistant, system, tool, function
+    const validRoles = ['user', 'assistant', 'system', 'tool', 'function'];
+    if (typeof msg.role !== 'string' || !validRoles.includes(msg.role)) {
       return {
         valid: false,
         error: {
-          message: `messages[${String(i)}].role must be one of: user, assistant, system`,
+          message: `messages[${String(i)}].role must be one of: ${validRoles.join(', ')}`,
           type: 'invalid_request_error',
           code: 'invalid_value',
           param: `messages[${String(i)}].role`,
@@ -938,7 +940,23 @@ function validateChatCompletionRequest(body: RawChatCompletionRequest): Validati
 function formatMessages(messages: ChatMessage[]): string {
   return messages
     .map((m) => {
-      const role = m.role === 'assistant' ? 'Assistant' : m.role === 'system' ? 'System' : 'User';
+      let role: string;
+      switch (m.role) {
+        case 'assistant':
+          role = 'Assistant';
+          break;
+        case 'system':
+          role = 'System';
+          break;
+        case 'tool':
+          role = 'Tool Result';
+          break;
+        case 'function':
+          role = 'Function Result';
+          break;
+        default:
+          role = 'User';
+      }
       return `${role}: ${m.content}`;
     })
     .join('\n\n');
