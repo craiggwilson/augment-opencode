@@ -349,12 +349,16 @@ async function handleChatCompletions(req: IncomingMessage, res: ServerResponse):
     console.log(`[${requestId}] Processing request for model: ${model}, stream: ${stream}`);
 
     if (stream) {
+      // Disable response buffering for real-time streaming
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
+        'Cache-Control': 'no-cache, no-transform',
         'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',  // Disable nginx buffering
         'X-Request-Id': requestId,
       });
+      // Flush headers immediately
+      res.flushHeaders();
 
       try {
         await callAugmentAPIStreaming(prompt, model, res, requestId, model);
