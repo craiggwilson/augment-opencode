@@ -1,8 +1,8 @@
 # Auggie Wrapper
 
-An OpenAI-compatible API proxy that routes requests to Claude Opus 4.5 via Augment Code SDK.
+An OpenAI-compatible API proxy that routes requests to Claude models via Augment Code SDK.
 
-This wrapper allows you to use [OpenCode](https://opencode.ai) or any other OpenAI-compatible client with Claude Opus 4.5 through Augment Code's powerful context engine.
+This wrapper allows you to use [OpenCode](https://opencode.ai) or any other OpenAI-compatible client with Claude models (Opus 4.5, Sonnet 4.5, Sonnet 4, Haiku 4.5) through Augment Code's powerful context engine.
 
 ## Prerequisites
 
@@ -70,17 +70,26 @@ Add the following to your OpenCode config file at `~/.config/opencode/opencode.j
   "provider": {
     "augment": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "Augment Code (Claude Opus)",
+      "name": "Augment Code",
       "options": {
         "baseURL": "http://localhost:8765/v1"
       },
       "models": {
-        "claude-opus-4-via-augment": {
-          "name": "Claude Opus 4.5 via Augment",
-          "limit": {
-            "context": 200000,
-            "output": 32000
-          }
+        "claude-opus-4.5": {
+          "name": "Claude Opus 4.5 (Augment)",
+          "limit": { "context": 200000, "output": 32000 }
+        },
+        "claude-sonnet-4.5": {
+          "name": "Claude Sonnet 4.5 (Augment)",
+          "limit": { "context": 200000, "output": 16000 }
+        },
+        "claude-sonnet-4": {
+          "name": "Claude Sonnet 4 (Augment)",
+          "limit": { "context": 200000, "output": 16000 }
+        },
+        "claude-haiku-4.5": {
+          "name": "Claude Haiku 4.5 (Augment)",
+          "limit": { "context": 200000, "output": 8000 }
         }
       }
     }
@@ -105,7 +114,7 @@ If you already have an `opencode.json` file, merge the `augment` provider into y
    /models
    ```
 
-3. **Select `augment/claude-opus-4-via-augment`**
+3. **Select any `augment/*` model** (e.g., `augment/claude-opus-4.5`)
 
 ## Usage
 
@@ -128,11 +137,19 @@ curl http://localhost:8765/health
 # List models
 curl http://localhost:8765/v1/models
 
-# Chat completion
+# Chat completion (default: claude-opus-4.5)
 curl http://localhost:8765/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-opus-4-via-augment",
+    "model": "claude-opus-4.5",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+
+# Use a different model
+curl http://localhost:8765/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-haiku-4.5",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 
@@ -140,7 +157,7 @@ curl http://localhost:8765/v1/chat/completions \
 curl http://localhost:8765/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-opus-4-via-augment",
+    "model": "claude-opus-4.5",
     "messages": [{"role": "user", "content": "Hello!"}],
     "stream": true
   }'
@@ -153,23 +170,17 @@ curl http://localhost:8765/v1/chat/completions \
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8765` | Server port |
-| `MODEL_NAME` | `claude-opus-4-via-augment` | Model name exposed to clients |
-| `AUGMENT_MODEL` | `opus4.5` | Augment model to use (see below) |
 
-### Available Augment Models
+### Available Models
 
-| Model ID | Description |
-|----------|-------------|
-| `opus4.5` | Claude Opus 4.5 (default, most capable) |
-| `sonnet4.5` | Claude Sonnet 4.5 (balanced) |
-| `sonnet4` | Claude Sonnet 4 |
-| `haiku4.5` | Claude Haiku 4.5 (fastest) |
+All models are available simultaneously. Select the model in your API request:
 
-Example using a different model:
-
-```bash
-AUGMENT_MODEL=sonnet4.5 npm start
-```
+| Model ID | Auggie ID | Description |
+|----------|-----------|-------------|
+| `claude-opus-4.5` | `opus4.5` | Default, most capable (200K context, 32K output) |
+| `claude-sonnet-4.5` | `sonnet4.5` | Balanced performance (200K context, 16K output) |
+| `claude-sonnet-4` | `sonnet4` | Previous generation (200K context, 16K output) |
+| `claude-haiku-4.5` | `haiku4.5` | Fastest, lightweight (200K context, 8K output) |
 
 ## API Endpoints
 
@@ -221,11 +232,11 @@ npm start
 
 1. Ensure the wrapper server is running
 2. Check that `~/.config/opencode/opencode.json` contains the `augment` provider configuration
-3. Run `/models` in OpenCode and look for `augment/claude-opus-4-via-augment`
+3. Run `/models` in OpenCode and look for `augment/claude-opus-4.5` (or other models)
 
 ### Wrong model being used
 
-Check the server logs. If you see "Unknown model" warnings, update to the latest version which uses `opus4.5`.
+Check the server logs. If you see "Unknown model" warnings, ensure you're using the correct model ID (e.g., `claude-opus-4.5`, not `opus4.5`).
 
 ## License
 
