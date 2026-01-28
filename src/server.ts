@@ -147,7 +147,7 @@ interface ClientPool {
 }
 
 interface AuggieSDK {
-  create: (options: { model?: string; apiKey?: string; apiUrl?: string }) => Promise<AuggieClient>;
+  create: (options: { model?: string; apiKey?: string; apiUrl?: string; workspaceRoot?: string }) => Promise<AuggieClient>;
 }
 
 // Configuration
@@ -657,44 +657,56 @@ async function initAuggie(): Promise<void> {
   }
 }
 
-async function createAuggieClient(auggieModel: string): Promise<AuggieClient> {
+async function createAuggieClient(auggieModel: string, workspaceRoot?: string): Promise<AuggieClient> {
   await initAuggie();
   if (!AuggieClass) {
     throw new Error('Auggie SDK not initialized');
   }
   const sess = await loadSession();
-  debugLog('Creating Auggie Client', { model: auggieModel, apiUrl: sess.tenantURL });
+  // Use provided workspace or fall back to home directory
+  const workspace = workspaceRoot ?? os.homedir();
+  debugLog('Creating Auggie Client', { model: auggieModel, apiUrl: sess.tenantURL, workspaceRoot: workspace });
   const client = await AuggieClass.create({
     model: auggieModel,
     apiKey: sess.accessToken,
     apiUrl: sess.tenantURL,
+    workspaceRoot: workspace,
   });
-  console.log(`New Auggie client created for model: ${auggieModel}`);
+  console.log(`New Auggie client created for model: ${auggieModel} (workspace: ${workspace})`);
   return client;
 }
 
-async function getAuggieClient(modelId: string): Promise<AuggieClient> {
+// Generate pool key combining model and workspace
+function getPoolKey(auggieModel: string, workspaceRoot?: string): string {
+  const workspace = workspaceRoot ?? os.homedir();
+  return `${auggieModel}:${workspace}`;
+}
+
+async function getAuggieClient(modelId: string, workspaceRoot?: string): Promise<AuggieClient> {
   const modelConfig = MODEL_MAP[modelId] ?? MODEL_MAP[DEFAULT_MODEL];
   if (!modelConfig) {
     throw new Error(`Unknown model: ${modelId} and default model not configured`);
   }
   const auggieModel = modelConfig.auggie;
+  const poolKey = getPoolKey(auggieModel, workspaceRoot);
   debugLog('getAuggieClient', {
     requestedModel: modelId,
     resolvedAuggieModel: auggieModel,
     usingDefault: !MODEL_MAP[modelId],
+    workspaceRoot: workspaceRoot ?? os.homedir(),
+    poolKey,
   });
 
-  clientPools[auggieModel] ??= { available: [], inUse: new Set(), creating: 0 };
+  clientPools[poolKey] ??= { available: [], inUse: new Set(), creating: 0 };
 
-  const pool = clientPools[auggieModel];
+  const pool = clientPools[poolKey];
 
   if (pool.available.length > 0) {
     const client = pool.available.pop();
     if (client) {
       pool.inUse.add(client);
       console.log(
-        `Reusing client for ${auggieModel} (available: ${String(pool.available.length)}, inUse: ${String(pool.inUse.size)})`
+        `Reusing client for ${poolKey} (available: ${String(pool.available.length)}, inUse: ${String(pool.inUse.size)})`
       );
       return client;
     }
@@ -704,11 +716,11 @@ async function getAuggieClient(modelId: string): Promise<AuggieClient> {
   if (totalClients < POOL_SIZE) {
     pool.creating++;
     try {
-      const client = await createAuggieClient(auggieModel);
+      const client = await createAuggieClient(auggieModel, workspaceRoot);
       pool.creating--;
       pool.inUse.add(client);
       console.log(
-        `Created new client for ${auggieModel} (available: ${String(pool.available.length)}, inUse: ${String(pool.inUse.size)})`
+        `Created new client for ${poolKey} (available: ${String(pool.available.length)}, inUse: ${String(pool.inUse.size)})`
       );
       return client;
     } catch (err) {
@@ -717,15 +729,16 @@ async function getAuggieClient(modelId: string): Promise<AuggieClient> {
     }
   }
 
-  console.log(`Pool at capacity for ${auggieModel}, creating temporary client`);
-  return await createAuggieClient(auggieModel);
+  console.log(`Pool at capacity for ${poolKey}, creating temporary client`);
+  return await createAuggieClient(auggieModel, workspaceRoot);
 }
 
-function releaseAuggieClient(modelId: string, client: AuggieClient): void {
+function releaseAuggieClient(modelId: string, client: AuggieClient, workspaceRoot?: string): void {
   const modelConfig = MODEL_MAP[modelId] ?? MODEL_MAP[DEFAULT_MODEL];
   if (!modelConfig) return;
   const auggieModel = modelConfig.auggie;
-  const pool = clientPools[auggieModel];
+  const poolKey = getPoolKey(auggieModel, workspaceRoot);
+  const pool = clientPools[poolKey];
   if (!pool) return;
 
   if (pool.inUse.has(client)) {
@@ -733,21 +746,22 @@ function releaseAuggieClient(modelId: string, client: AuggieClient): void {
     if (pool.available.length < POOL_SIZE) {
       pool.available.push(client);
       console.log(
-        `Client returned to pool for ${auggieModel} (available: ${String(pool.available.length)}, inUse: ${String(pool.inUse.size)})`
+        `Client returned to pool for ${poolKey} (available: ${String(pool.available.length)}, inUse: ${String(pool.inUse.size)})`
       );
     } else {
       void client.close();
-      console.log(`Pool full, closed client for ${auggieModel}`);
+      console.log(`Pool full, closed client for ${poolKey}`);
     }
   }
 }
 
 // Discard a client without returning it to the pool (used when client has errors)
-function discardAuggieClient(modelId: string, client: AuggieClient, reason?: string): void {
+function discardAuggieClient(modelId: string, client: AuggieClient, reason?: string, workspaceRoot?: string): void {
   const modelConfig = MODEL_MAP[modelId] ?? MODEL_MAP[DEFAULT_MODEL];
   if (!modelConfig) return;
   const auggieModel = modelConfig.auggie;
-  const pool = clientPools[auggieModel];
+  const poolKey = getPoolKey(auggieModel, workspaceRoot);
+  const pool = clientPools[poolKey];
   if (!pool) return;
 
   if (pool.inUse.has(client)) {
@@ -960,6 +974,28 @@ function formatMessages(messages: ChatMessage[]): string {
       return `${role}: ${m.content}`;
     })
     .join('\n\n');
+}
+
+// Extract workspace root from messages - OpenCode sends this in system message
+function extractWorkspaceFromMessages(messages: ChatMessage[]): string | null {
+  for (const msg of messages) {
+    if (msg.role === 'system' && msg.content) {
+      // Pattern 1: <supervisor>The user's workspace is opened at /path/to/workspace.</supervisor>
+      const supervisorMatch = msg.content.match(
+        /<supervisor>[^<]*?(?:workspace is opened at|workspace is)\s+[`"']?([^`"'<\n]+)[`"']?/i
+      );
+      if (supervisorMatch?.[1]) {
+        return supervisorMatch[1].trim().replace(/\.$/, '');
+      }
+
+      // Pattern 2: Workspace: /path/to/workspace
+      const workspaceMatch = msg.content.match(/(?:workspace|working directory|cwd):\s*[`"']?([^\s`"'\n]+)/i);
+      if (workspaceMatch?.[1]) {
+        return workspaceMatch[1].trim();
+      }
+    }
+  }
+  return null;
 }
 
 // Estimate token counts (rough approximation: ~4 chars per token)
@@ -1255,12 +1291,13 @@ async function callAugmentAPIStreamingInternal(
   res: ServerResponse,
   requestId: string,
   model: string,
+  workspaceRoot?: string,
   abortSignal?: AbortSignal
 ): Promise<void> {
   const startTime = Date.now();
-  console.log(`[${requestId}] 🚀 Starting streaming call to ${modelId} (prompt: ${String(prompt.length)} chars)`);
+  console.log(`[${requestId}] 🚀 Starting streaming call to ${modelId} (prompt: ${String(prompt.length)} chars, workspace: ${workspaceRoot ?? 'default'})`);
 
-  const client = await getAuggieClient(modelId);
+  const client = await getAuggieClient(modelId, workspaceRoot);
   client.onSessionUpdate(createStreamCallback(res, model, requestId));
   let hasError = false;
   let caughtError: Error | null = null;
@@ -1301,15 +1338,15 @@ async function callAugmentAPIStreamingInternal(
     // Discard client on session errors or aborts, otherwise return to pool
     if (hasError && caughtError) {
       if (caughtError.message === 'Request aborted') {
-        discardAuggieClient(modelId, client, 'request aborted/timeout');
+        discardAuggieClient(modelId, client, 'request aborted/timeout', workspaceRoot);
       } else if (isSessionError(caughtError)) {
-        discardAuggieClient(modelId, client, 'session/connection error');
+        discardAuggieClient(modelId, client, 'session/connection error', workspaceRoot);
       } else {
         // Other errors - still return client to pool
-        releaseAuggieClient(modelId, client);
+        releaseAuggieClient(modelId, client, workspaceRoot);
       }
     } else {
-      releaseAuggieClient(modelId, client);
+      releaseAuggieClient(modelId, client, workspaceRoot);
     }
   }
   if (caughtError) {
@@ -1323,10 +1360,11 @@ async function callAugmentAPIStreaming(
   res: ServerResponse,
   requestId: string,
   model: string,
+  workspaceRoot?: string,
   abortSignal?: AbortSignal
 ): Promise<void> {
   await withRetry(
-    () => callAugmentAPIStreamingInternal(prompt, modelId, res, requestId, model, abortSignal),
+    () => callAugmentAPIStreamingInternal(prompt, modelId, res, requestId, model, workspaceRoot, abortSignal),
     'Augment API Streaming',
     requestId
   );
@@ -1335,9 +1373,10 @@ async function callAugmentAPIStreaming(
 async function callAugmentAPIInternal(
   prompt: string,
   modelId: string,
+  workspaceRoot?: string,
   abortSignal?: AbortSignal
 ): Promise<string> {
-  const client = await getAuggieClient(modelId);
+  const client = await getAuggieClient(modelId, workspaceRoot);
   let hasError = false;
   let caughtError: Error | null = null;
   let result = '';
@@ -1377,15 +1416,15 @@ async function callAugmentAPIInternal(
     // Discard client on session errors or aborts, otherwise return to pool
     if (hasError && caughtError) {
       if (caughtError.message === 'Request aborted') {
-        discardAuggieClient(modelId, client, 'request aborted/timeout');
+        discardAuggieClient(modelId, client, 'request aborted/timeout', workspaceRoot);
       } else if (isSessionError(caughtError)) {
-        discardAuggieClient(modelId, client, 'session/connection error');
+        discardAuggieClient(modelId, client, 'session/connection error', workspaceRoot);
       } else {
         // Other errors - still return client to pool
-        releaseAuggieClient(modelId, client);
+        releaseAuggieClient(modelId, client, workspaceRoot);
       }
     } else {
-      releaseAuggieClient(modelId, client);
+      releaseAuggieClient(modelId, client, workspaceRoot);
     }
   }
   if (caughtError) {
@@ -1398,10 +1437,11 @@ async function callAugmentAPI(
   prompt: string,
   modelId: string,
   requestId: string,
+  workspaceRoot?: string,
   abortSignal?: AbortSignal
 ): Promise<string> {
   return withRetry(
-    () => callAugmentAPIInternal(prompt, modelId, abortSignal),
+    () => callAugmentAPIInternal(prompt, modelId, workspaceRoot, abortSignal),
     'Augment API',
     requestId
   );
@@ -1496,6 +1536,12 @@ async function handleChatCompletions(req: IncomingMessage, res: ServerResponse):
     const stream = body.stream ?? false;
     const model = body.model ?? DEFAULT_MODEL;
 
+    // Extract workspace root from messages (OpenCode sends this in system message)
+    const workspaceRoot = extractWorkspaceFromMessages(messages);
+    if (workspaceRoot) {
+      structuredLog('info', 'Request', `Extracted workspace: ${workspaceRoot}`, { requestId });
+    }
+
     // Track model usage
     metrics.requestsByModel[model] = (metrics.requestsByModel[model] ?? 0) + 1;
 
@@ -1511,7 +1557,7 @@ async function handleChatCompletions(req: IncomingMessage, res: ServerResponse):
     const prompt = formatMessages(messages);
     structuredLog('info', 'Request', `Processing request`, {
       requestId,
-      data: { model, stream, messageCount: messages.length },
+      data: { model, stream, messageCount: messages.length, workspace: workspaceRoot ?? 'default' },
     });
 
     // Check for abort before making API call
@@ -1533,7 +1579,7 @@ async function handleChatCompletions(req: IncomingMessage, res: ServerResponse):
       res.flushHeaders();
 
       try {
-        await callAugmentAPIStreaming(prompt, model, res, requestId, model, abortController.signal);
+        await callAugmentAPIStreaming(prompt, model, res, requestId, model, workspaceRoot ?? undefined, abortController.signal);
         res.write(createStreamChunk('', model, true));
         res.write('data: [DONE]\n\n');
         cleanup(true);
@@ -1547,7 +1593,7 @@ async function handleChatCompletions(req: IncomingMessage, res: ServerResponse):
       }
       res.end();
     } else {
-      const response = await callAugmentAPI(prompt, model, requestId, abortController.signal);
+      const response = await callAugmentAPI(prompt, model, requestId, workspaceRoot ?? undefined, abortController.signal);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(createChatResponse(response, model, prompt)));
       cleanup(true);
