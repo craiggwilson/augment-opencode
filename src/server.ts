@@ -1094,7 +1094,12 @@ function formatLocations(locations?: ToolCallLocation[]): string {
 const toolCallIndices = new Map<string, number>();
 let toolCallCounter = 0;
 
-function createStreamCallback(res: ServerResponse, model: string, requestId: string) {
+interface StreamCallbackResult {
+  callback: (notification: SessionNotification) => void;
+  flush: () => void;
+}
+
+function createStreamCallback(res: ServerResponse, model: string, requestId: string): StreamCallbackResult {
   // Reset tool call tracking for this request
   toolCallIndices.clear();
   toolCallCounter = 0;
@@ -1103,7 +1108,48 @@ function createStreamCallback(res: ServerResponse, model: string, requestId: str
   let chunkCount = 0;
   let lastChunkTime = Date.now();
 
-  return (notification: SessionNotification): void => {
+  // Buffer for reasoning content - we need to send all reasoning BEFORE any text
+  // to ensure proper ordering in OpenCode's UI
+  let reasoningBuffer: string[] = [];
+  let hasStartedTextContent = false;
+  let hasFlushedReasoning = false;
+
+  // Helper to flush buffered reasoning content
+  const flushReasoningBuffer = (): void => {
+    if (hasFlushedReasoning || reasoningBuffer.length === 0) return;
+    hasFlushedReasoning = true;
+
+    const combinedReasoning = reasoningBuffer.join('');
+    const timestamp = Math.floor(Date.now() / 1000);
+
+    console.log(`[${requestId}] 💭 Flushing ${String(reasoningBuffer.length)} reasoning chunks (${String(combinedReasoning.length)} chars)`);
+
+    // Send all reasoning as a single chunk before text starts
+    const thoughtChunk = {
+      id: `chatcmpl-${requestId}`,
+      object: 'chat.completion.chunk',
+      created: timestamp,
+      model,
+      system_fingerprint: SYSTEM_FINGERPRINT,
+      choices: [
+        {
+          index: 0,
+          delta: {
+            role: 'assistant',
+            reasoning_content: combinedReasoning,
+          },
+          finish_reason: null,
+          logprobs: null,
+        },
+      ],
+    };
+    res.write(`data: ${JSON.stringify(thoughtChunk)}\n\n`);
+
+    // Clear the buffer
+    reasoningBuffer = [];
+  };
+
+  const callback = (notification: SessionNotification): void => {
     const update = notification.update;
     const sessionId = notification.sessionId ?? requestId;
     const timestamp = Math.floor(Date.now() / 1000);
@@ -1140,6 +1186,12 @@ function createStreamCallback(res: ServerResponse, model: string, requestId: str
 
       case 'agent_message_chunk':
         if (update.content?.type === 'text' && update.content.text) {
+          // Flush any buffered reasoning before sending text content
+          // This ensures reasoning appears BEFORE text in the UI
+          if (!hasStartedTextContent) {
+            hasStartedTextContent = true;
+            flushReasoningBuffer();
+          }
           res.write(createStreamChunk(update.content.text, model));
         }
         break;
@@ -1150,26 +1202,39 @@ function createStreamCallback(res: ServerResponse, model: string, requestId: str
           console.log(
             `[${requestId}] 💭 Thinking: ${text.substring(0, 100)}${text.length > 100 ? '...' : ''}`
           );
-          // Send thinking as extended thinking format (Anthropic-style)
-          const thoughtChunk = {
-            id: `chatcmpl-${requestId}`,
-            object: 'chat.completion.chunk',
-            created: timestamp,
-            model,
-            system_fingerprint: SYSTEM_FINGERPRINT,
-            choices: [
-              {
-                index: 0,
-                delta: {
-                  role: 'assistant',
-                  reasoning_content: text,
+
+          // If we haven't started text content yet, buffer the reasoning
+          // This handles the case where thought chunks come interleaved with message chunks
+          if (!hasStartedTextContent) {
+            reasoningBuffer.push(text);
+          } else {
+            // If text has already started and we get more reasoning,
+            // we need to send it immediately as a new reasoning block.
+            // However, this is suboptimal - the UI may show it at the end.
+            // Log a warning for debugging.
+            console.log(
+              `[${requestId}] ⚠️ Late reasoning chunk received after text started - may appear at end of output`
+            );
+            const thoughtChunk = {
+              id: `chatcmpl-${requestId}`,
+              object: 'chat.completion.chunk',
+              created: timestamp,
+              model,
+              system_fingerprint: SYSTEM_FINGERPRINT,
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    role: 'assistant',
+                    reasoning_content: text,
+                  },
+                  finish_reason: null,
+                  logprobs: null,
                 },
-                finish_reason: null,
-                logprobs: null,
-              },
-            ],
-          };
-          res.write(`data: ${JSON.stringify(thoughtChunk)}\n\n`);
+              ],
+            };
+            res.write(`data: ${JSON.stringify(thoughtChunk)}\n\n`);
+          }
         }
         break;
 
@@ -1265,6 +1330,11 @@ function createStreamCallback(res: ServerResponse, model: string, requestId: str
         debugLog(`Unknown Update [${requestId}]`, update);
     }
   };
+
+  return {
+    callback,
+    flush: flushReasoningBuffer,
+  };
 }
 
 // Check if response is an SDK error (JSON with error field)
@@ -1298,7 +1368,8 @@ async function callAugmentAPIStreamingInternal(
   console.log(`[${requestId}] 🚀 Starting streaming call to ${modelId} (prompt: ${String(prompt.length)} chars, workspace: ${workspaceRoot ?? 'default'})`);
 
   const client = await getAuggieClient(modelId, workspaceRoot);
-  client.onSessionUpdate(createStreamCallback(res, model, requestId));
+  const streamHandler = createStreamCallback(res, model, requestId);
+  client.onSessionUpdate(streamHandler.callback);
   let hasError = false;
   let caughtError: Error | null = null;
 
@@ -1334,6 +1405,10 @@ async function callAugmentAPIStreamingInternal(
     hasError = true;
     caughtError = err as Error;
   } finally {
+    // Flush any buffered reasoning content before ending the stream
+    // This handles the case where reasoning was received but no text content followed
+    streamHandler.flush();
+
     client.onSessionUpdate(null);
     // Discard client on session errors or aborts, otherwise return to pool
     if (hasError && caughtError) {
