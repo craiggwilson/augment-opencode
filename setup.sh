@@ -90,6 +90,10 @@ config.provider.augment = {
     baseURL: 'http://localhost:8765/v1'
   },
   models: {
+    'claude-opus-4.6': {
+      name: 'Claude Opus 4.6 (Augment)',
+      limit: { context: 200000, output: 32000 }
+    },
     'claude-opus-4.5': {
       name: 'Claude Opus 4.5 (Augment)',
       limit: { context: 200000, output: 32000 }
@@ -139,6 +143,10 @@ else
         "baseURL": "http://localhost:8765/v1"
       },
       "models": {
+        "claude-opus-4.6": {
+          "name": "Claude Opus 4.6 (Augment)",
+          "limit": { "context": 200000, "output": 32000 }
+        },
         "claude-opus-4.5": {
           "name": "Claude Opus 4.5 (Augment)",
           "limit": { "context": 200000, "output": 32000 }
@@ -186,7 +194,8 @@ echo -e "  npm start"
 echo ""
 echo -e "${BLUE}Available models in OpenCode:${NC}"
 echo -e "  Claude models:"
-echo -e "  - augment/claude-opus-4.5     (default, recommended)"
+echo -e "  - augment/claude-opus-4.6     (default, recommended)"
+echo -e "  - augment/claude-opus-4.5"
 echo -e "  - augment/claude-sonnet-4.5"
 echo -e "  - augment/claude-sonnet-4"
 echo -e "  - augment/claude-haiku-4.5"

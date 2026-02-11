@@ -15,7 +15,7 @@ AI assistant context and working notes for the augment-opencode repository.
 **Auggie** refers to the Augment Code CLI tool (`@augmentcode/auggie`), which provides:
 - Authentication with Augment Code services (`auggie login`)
 - SDK for programmatic access to Augment Code's API
-- Access to Claude models (Opus 4.5, Sonnet 4.5, Haiku 4.5) and GPT models (5.x series)
+- Access to Claude models (Opus 4.6, Opus 4.5, Sonnet 4.5, Haiku 4.5) and GPT models (5.x series)
 
 This repository wraps the Auggie SDK to provide an OpenAI-compatible HTTP API.
 
@@ -48,7 +48,8 @@ OpenCode/Client → HTTP (localhost:8765) → server.ts → Auggie SDK → Augme
 
 | Model ID | Backend | Context | Output | Use Case |
 |----------|---------|---------|--------|----------|
-| `claude-opus-4.5` | Augment | 200K | 32K | Default, most capable |
+| `claude-opus-4.6` | Augment | 200K | 32K | Default, most capable |
+| `claude-opus-4.5` | Augment | 200K | 32K | Previous Opus generation |
 | `claude-sonnet-4.5` | Augment | 200K | 16K | Balanced performance |
 | `claude-sonnet-4` | Augment | 200K | 16K | Previous generation |
 | `claude-haiku-4.5` | Augment | 200K | 8K | Fastest, lightweight |

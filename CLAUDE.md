@@ -46,7 +46,8 @@ OpenCode/Client → HTTP Request → src/server.ts (builds to dist/server.js) �
 
 | OpenCode Model ID | Auggie Model ID | Context | Output | Description |
 |-------------------|-----------------|---------|--------|-------------|
-| `claude-opus-4.5` | `opus4.5` | 200K | 32K | **Default**, most capable |
+| `claude-opus-4.6` | `opus4.6` | 200K | 32K | **Default**, most capable |
+| `claude-opus-4.5` | `opus4.5` | 200K | 32K | Previous Opus generation |
 | `claude-sonnet-4.5` | `sonnet4.5` | 200K | 16K | Balanced performance |
 | `claude-sonnet-4` | `sonnet4` | 200K | 16K | Previous generation |
 | `claude-haiku-4.5` | `haiku4.5` | 200K | 8K | Fastest, lightweight |
@@ -84,10 +85,11 @@ curl -X POST http://localhost:8765/v1/chat/completions \
 ### Model Mapping (src/server.ts)
 
 ```javascript
-const DEFAULT_MODEL = 'claude-opus-4.5';
+const DEFAULT_MODEL = 'claude-opus-4.6';
 
 const MODEL_MAP = {
   // Claude models
+  'claude-opus-4.6': { auggie: 'opus4.6', name: 'Claude Opus 4.6', context: 200000, output: 32000 },
   'claude-opus-4.5': { auggie: 'opus4.5', name: 'Claude Opus 4.5', context: 200000, output: 32000 },
   'claude-sonnet-4.5': { auggie: 'sonnet4.5', name: 'Claude Sonnet 4.5', context: 200000, output: 16000 },
   'claude-sonnet-4': { auggie: 'sonnet4', name: 'Claude Sonnet 4', context: 200000, output: 16000 },
@@ -161,7 +163,7 @@ Provider uses `@ai-sdk/openai-compatible` npm package:
       "name": "Augment Code",
       "options": { "baseURL": "http://localhost:8765/v1" },
       "models": {
-        "claude-opus-4.5": { "name": "Claude Opus 4.5 (Augment)", "limit": { "context": 200000, "output": 32000 } }
+        "claude-opus-4.6": { "name": "Claude Opus 4.6 (Augment)", "limit": { "context": 200000, "output": 32000 } }
       }
     }
   }
