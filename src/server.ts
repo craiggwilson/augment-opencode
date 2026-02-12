@@ -827,6 +827,56 @@ interface RawChatMessage {
   content?: unknown;
 }
 
+// Content part interface for array-style content (OpenAI API format)
+interface ContentPart {
+  type: string;
+  text?: string;
+}
+
+// Helper to normalize content that may be a string or array of content parts
+function normalizeMessageContent(content: unknown): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    // Extract text from content parts array
+    return content
+      .filter(
+        (part): part is ContentPart =>
+          typeof part === 'object' && part !== null && 'type' in part
+      )
+      .map((part) => {
+        if (part.type === 'text' && typeof part.text === 'string') {
+          return part.text;
+        }
+        // For unsupported content types, return empty string
+        return '';
+      })
+      .filter((text) => text.length > 0)
+      .join('\n');
+  }
+
+  // Fallback for unexpected types
+  return String(content ?? '');
+}
+
+// Helper to check if content is valid (string or array of content parts)
+function isValidMessageContent(content: unknown): boolean {
+  if (typeof content === 'string') {
+    return true;
+  }
+
+  if (Array.isArray(content)) {
+    // Check that all elements are valid content parts
+    return content.every(
+      (part) => typeof part === 'object' && part !== null && 'type' in part
+    );
+  }
+
+  return false;
+}
+
 function validateChatCompletionRequest(body: RawChatCompletionRequest): ValidationResult {
   // Validate messages array
   if (!body.messages) {
@@ -909,11 +959,11 @@ function validateChatCompletionRequest(body: RawChatCompletionRequest): Validati
       };
     }
 
-    if (typeof msg.content !== 'string') {
+    if (!isValidMessageContent(msg.content)) {
       return {
         valid: false,
         error: {
-          message: `messages[${String(i)}].content must be a string`,
+          message: `messages[${String(i)}].content must be a string or array of content parts`,
           type: 'invalid_request_error',
           code: 'invalid_type',
           param: `messages[${String(i)}].content`,
@@ -1607,7 +1657,11 @@ async function handleChatCompletions(req: IncomingMessage, res: ServerResponse):
       return;
     }
 
-    const messages = body.messages ?? [];
+    // Normalize messages - convert array content to string
+    const messages: ChatMessage[] = ((body.messages ?? []) as RawChatMessage[]).map((msg) => ({
+      role: msg.role as ChatMessage['role'],
+      content: normalizeMessageContent(msg.content),
+    }));
     const stream = body.stream ?? false;
     const model = body.model ?? DEFAULT_MODEL;
 
